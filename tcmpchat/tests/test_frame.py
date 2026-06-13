@@ -4,6 +4,7 @@ import unittest
 from tcmp import constants as c
 from tcmp import frame as f
 from tcmp import hmac_utils as h
+from tcmp.errors import TCMPError
 
 
 KEY = b"\x33" * c.SESSION_KEY_LENGTH
@@ -43,7 +44,7 @@ class TestPackString(unittest.TestCase):
 
 class TestBuildParseRoundtrip(unittest.TestCase):
     def test_header_length_is_49(self):
-        frame = f.build_frame(c.TYPE_PING, 0, 1, 0, b"")
+        frame = f.build_frame(c.TYPE_PING, 0, 1, 0, b"", session_key=KEY)
         self.assertEqual(len(frame), c.HEADER_LENGTH)
 
     def test_roundtrip_fields(self):
@@ -80,8 +81,9 @@ class TestBuildParseRoundtrip(unittest.TestCase):
         self.assertEqual(frame[3:11], bytes.fromhex("0102030405060708"))
 
     def test_parse_too_short_raises(self):
-        with self.assertRaises(ValueError):
+        with self.assertRaises(TCMPError) as ctx:
             f.parse_frame(b"\x00" * 10)
+        self.assertEqual(ctx.exception.error_code, c.ERR_MALFORMED_PAYLOAD)
 
 
 class TestHmacBehaviour(unittest.TestCase):
@@ -96,9 +98,23 @@ class TestHmacBehaviour(unittest.TestCase):
             frame = f.build_frame(t, 0, 1, 0, b"data", session_key=KEY)
             self.assertEqual(f.parse_frame(frame)["hmac"], h.ZERO_HMAC)
 
-    def test_no_session_key_gives_zero_hmac(self):
-        frame = f.build_frame(c.TYPE_MSG, 0, 1, 0, b"data", session_key=None)
-        self.assertEqual(f.parse_frame(frame)["hmac"], h.ZERO_HMAC)
+    def test_post_auth_without_key_raises(self):
+        # Walidacja: ramka post-auth bez session_key nie może powstać po cichu.
+        with self.assertRaises(ValueError):
+            f.build_frame(c.TYPE_MSG, 0, 1, 0, b"data", session_key=None)
+
+    def test_pre_auth_err_bye_without_key_get_zero_hmac(self):
+        # ERR/BYE mogą wystąpić zanim powstanie session_key (faza pre-auth).
+        for t in (c.TYPE_ERR, c.TYPE_BYE):
+            frame = f.build_frame(t, 0, 1, 0, b"x", session_key=None)
+            self.assertEqual(f.parse_frame(frame)["hmac"], h.ZERO_HMAC)
+
+    def test_err_bye_with_key_get_real_hmac(self):
+        # Po ustanowieniu sesji ERR/BYE niosą prawdziwy, weryfikowalny HMAC.
+        for t in (c.TYPE_ERR, c.TYPE_BYE):
+            frame = f.build_frame(t, 0, 1, 0, b"x", session_key=KEY)
+            self.assertNotEqual(f.parse_frame(frame)["hmac"], h.ZERO_HMAC)
+            self.assertTrue(h.verify_frame(frame, KEY))
 
     def test_tampered_payload_fails_verify(self):
         frame = bytearray(f.build_frame(c.TYPE_MSG, 0, 1, 0, b"data", session_key=KEY))
@@ -132,18 +148,18 @@ class TestSocketIO(unittest.TestCase):
         self.assertEqual(received, original)
 
     def test_recv_frame_empty_payload(self):
-        original = f.build_frame(c.TYPE_PING, 0, 1, 0, b"")
+        original = f.build_frame(c.TYPE_PING, 0, 1, 0, b"", session_key=KEY)
         sock = _FakeSocket(original, chunk=3)
         self.assertEqual(f.recv_frame(sock), original)
 
     def test_recv_closed_connection_raises(self):
-        partial = f.build_frame(c.TYPE_PING, 0, 1, 0, b"")[:10]
+        partial = f.build_frame(c.TYPE_PING, 0, 1, 0, b"", session_key=KEY)[:10]
         sock = _FakeSocket(partial, chunk=4)
         with self.assertRaises(ConnectionError):
             f.recv_frame(sock)
 
     def test_send_frame_writes_all_bytes(self):
-        frame = f.build_frame(c.TYPE_PONG, 0, 1, 0, b"")
+        frame = f.build_frame(c.TYPE_PONG, 0, 1, 0, b"", session_key=KEY)
         sock = _FakeSocket(b"")
         f.send_frame(sock, frame)
         self.assertEqual(bytes(sock.sent), frame)

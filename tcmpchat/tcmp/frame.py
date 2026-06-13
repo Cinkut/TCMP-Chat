@@ -1,7 +1,7 @@
 import struct
 from .constants import (
     PROTOCOL_VERSION, HEADER_LENGTH, OFFSET_LENGTH, FLAG_MORE_DATA,
-    TYPE_MIN, TYPE_MAX, MAX_FRAME_PAYLOAD,
+    TYPE_MIN, TYPE_MAX, TYPE_ERR, TYPE_BYE, MAX_FRAME_PAYLOAD,
     ERR_UNSUPPORTED_VERSION, ERR_UNKNOWN_TYPE, ERR_MALFORMED_PAYLOAD,
     ERR_PAYLOAD_TOO_LARGE, ERR_HMAC_INVALID,
 )
@@ -37,13 +37,19 @@ def build_frame(
     )
     if type_ in PRE_AUTH_TYPES:
         hmac_bytes = ZERO_HMAC
-    elif session_key is None:
+    elif session_key is not None:
+        hmac_bytes = compute_hmac(session_key, pre_hmac + payload)
+    elif type_ in (TYPE_ERR, TYPE_BYE):
+        # ERR/BYE mogą wystąpić w fazie pre-auth, zanim powstanie session_key
+        # (np. ERR_UNSUPPORTED_VERSION na złym HELLO, ERR_AUTH_FAILED /
+        # ERR_AUTH_LIMIT na nieudanym AUTH, BYE reason=0x01 po timeoucie AUTH).
+        # Po ustanowieniu sesji niosą prawdziwy HMAC (gałąź wyżej).
+        hmac_bytes = ZERO_HMAC
+    else:
         # Ochrona przed cichym wysłaniem ramki post-auth bez integralności.
         raise ValueError(
             f"session_key wymagany dla ramki typu 0x{type_:02X} (poza PRE_AUTH_TYPES)"
         )
-    else:
-        hmac_bytes = compute_hmac(session_key, pre_hmac + payload)
     return pre_hmac + hmac_bytes + payload
 
 

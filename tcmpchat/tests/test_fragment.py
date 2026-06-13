@@ -1,7 +1,9 @@
 """Testy fragmentacji i ponownego składania payloadów."""
 import unittest
 
+from tcmp import constants as c
 from tcmp import fragment as fr
+from tcmp.errors import TCMPError
 
 
 class TestFragmentPayload(unittest.TestCase):
@@ -73,14 +75,16 @@ class TestReassembly(unittest.TestCase):
 
     def test_new_message_must_start_at_zero(self):
         buf = fr.ReassemblyBuffer()
-        with self.assertRaises(ValueError):
+        with self.assertRaises(TCMPError) as ctx:
             buf.receive(1, 1, True, b"oops")
+        self.assertEqual(ctx.exception.error_code, c.ERR_INVALID_FRAG)
 
     def test_out_of_order_fragment_raises(self):
         buf = fr.ReassemblyBuffer()
         buf.receive(1, 0, True, b"a")
-        with self.assertRaises(ValueError):
+        with self.assertRaises(TCMPError) as ctx:
             buf.receive(1, 2, True, b"skip")   # oczekiwano frag_num=1
+        self.assertEqual(ctx.exception.error_code, c.ERR_INVALID_FRAG)
 
     def test_discard_removes_partial(self):
         buf = fr.ReassemblyBuffer()
