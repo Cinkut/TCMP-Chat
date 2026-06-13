@@ -1,0 +1,8 @@
+# Zależności TCMPChat.
+#
+# Serwer (server/) wymaga bcrypt do hashowania haseł.
+# Klient (client/) i wspólna biblioteka (tcmp/) korzystają wyłącznie z
+# biblioteki standardowej Pythona (socket, ssl, struct, hmac, hashlib...).
+# TLS opiera się na module ssl - bez dodatkowych pakietów.
+
+bcrypt>=4.0.0
