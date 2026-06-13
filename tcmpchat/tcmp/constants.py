@@ -172,6 +172,21 @@ SESSION_KEY_LENGTH = 32          # klucz HMAC z AUTH_OK (zawsze 32B)
 
 STRING_LEN_FIELD = 2             # stringi poprzedzone 2-bajtowym polem długości
 
+# Maksymalny payload pojedynczej ramki - górny limit do walidacji pola LENGTH
+# oraz ochrony przed DoS. recv_frame odrzuca większe deklaracje BEZ czytania
+# (LENGTH to 4B, więc bez limitu atakujący mógłby zadeklarować ~4 GB).
+# Najwiekszy legalny payload to fragment FILE z maksymalnymi polami nagłówkowymi:
+#   recipient_len(2) + recipient(64) + timestamp(8) + filename_len(2)
+#   + filename(128) + mimetype_id(1) + total_filesize(4) + chunk_data(65535)
+MAX_FRAME_PAYLOAD = (
+    STRING_LEN_FIELD + MAX_RECIPIENT       # recipient
+    + 8                                    # timestamp
+    + STRING_LEN_FIELD + MAX_FILENAME      # filename
+    + 1                                    # mimetype_id
+    + 4                                    # total_filesize
+    + MAX_TEXT_PER_FRAGMENT                # chunk_data
+)  # = 65 744
+
 # --------------------------------------------------------------------------- #
 # Timeouty (sekundy) i zasady keep-alive / rate-limiting
 # --------------------------------------------------------------------------- #

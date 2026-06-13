@@ -1,6 +1,7 @@
 import time
 from dataclasses import dataclass, field
-from .constants import MAX_TEXT_PER_FRAGMENT, TIMEOUT_FRAGMENT
+from .constants import MAX_TEXT_PER_FRAGMENT, TIMEOUT_FRAGMENT, ERR_INVALID_FRAG
+from .errors import TCMPError
 
 MAX_FRAGMENT_PAYLOAD: int = MAX_TEXT_PER_FRAGMENT  # 65 535
 
@@ -40,13 +41,18 @@ class ReassemblyBuffer:
 
         if msg_id not in self._buffers:
             if frag_num != 0:
-                raise ValueError(f"Expected frag_num=0 for new message, got {frag_num}")
+                raise TCMPError(
+                    ERR_INVALID_FRAG,
+                    f"oczekiwano frag_num=0 dla nowej wiadomości, otrzymano {frag_num}",
+                )
             self._buffers[msg_id] = _AssemblyState()
 
         state = self._buffers[msg_id]
         expected = len(state.chunks)
         if frag_num != expected:
-            raise ValueError(f"Expected frag_num={expected}, got {frag_num}")
+            raise TCMPError(
+                ERR_INVALID_FRAG, f"oczekiwano frag_num={expected}, otrzymano {frag_num}"
+            )
 
         state.chunks[frag_num] = data
         if not more_data:
