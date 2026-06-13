@@ -1,6 +1,7 @@
 """Testy parsera komend CLI (model aktywnej rozmowy) i zapisu plików - bez sieci."""
 import os
 import tempfile
+import time
 import unittest
 
 from client import cli
@@ -157,6 +158,35 @@ class TestSaveIncomingFile(unittest.TestCase):
             # Zapis tylko do download_dir, bez wyjścia poza katalog.
             self.assertTrue(os.path.isfile(os.path.join(tmp, "evil.png")))
             self.assertFalse(os.path.exists(os.path.join(tmp, "..", "evil.png")))
+
+
+class TestDisplayShowsTimestamp(unittest.TestCase):
+    def test_on_message_includes_timestamp_and_sender(self):
+        out = _Out()
+        ts_ms = 1_700_000_000_000
+        expected = time.strftime("%H:%M:%S", time.localtime(ts_ms / 1000))
+        cli._on_message(None, {"sender": "bob", "text": "hej", "timestamp_ms": ts_ms}, out=out)
+        line = out.lines[0]
+        self.assertIn(expected, line)
+        self.assertIn("bob", line)
+        self.assertIn("hej", line)
+
+    def test_on_message_missing_timestamp_falls_back(self):
+        out = _Out()
+        cli._on_message(None, {"sender": "bob", "text": "hej"}, out=out)
+        self.assertIn("??:??:??", out.lines[0])
+
+    def test_save_file_includes_timestamp(self):
+        out = _Out()
+        ts_ms = 1_700_000_000_000
+        expected = time.strftime("%H:%M:%S", time.localtime(ts_ms / 1000))
+        with tempfile.TemporaryDirectory() as tmp:
+            cli._save_incoming_file(
+                None,
+                {"filename": "p.png", "data": b"x", "sender": "bob", "timestamp_ms": ts_ms},
+                out=out, download_dir=tmp,
+            )
+        self.assertIn(expected, out.lines[0])
 
 
 if __name__ == "__main__":

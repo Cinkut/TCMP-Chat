@@ -18,12 +18,21 @@ Odebrane pliki zapisywane są do katalogu ./downloads/.
 """
 import argparse
 import sys
+import time
 
 from tcmp.errors import TCMPError
 
 from .tcmp_client import TCMPClient
 
 DOWNLOAD_DIR = "downloads"
+
+
+def _fmt_ts(timestamp_ms) -> str:
+    """Formatuje znacznik czasu (Unix ms) do HH:MM:SS; '??:??:??' gdy brak/zły."""
+    try:
+        return time.strftime("%H:%M:%S", time.localtime(timestamp_ms / 1000))
+    except (TypeError, ValueError, OSError):
+        return "??:??:??"
 
 _HELP = (
     "Komendy:\n"
@@ -170,7 +179,7 @@ def handle_command(session: CLISession, line: str, out=None) -> bool:
 # Callbacki wypisujące zdarzenia
 # --------------------------------------------------------------------------- #
 def _on_message(_client, m, out=print) -> None:
-    out(f"\n[{m.get('sender', '?')}]: {m['text']}")
+    out(f"\n[{_fmt_ts(m.get('timestamp_ms'))}] {m.get('sender', '?')}: {m['text']}")
 
 
 def _save_incoming_file(_client, f, out=print, download_dir=DOWNLOAD_DIR) -> None:
@@ -181,7 +190,8 @@ def _save_incoming_file(_client, f, out=print, download_dir=DOWNLOAD_DIR) -> Non
     dest = os.path.join(download_dir, safe_name)
     with open(dest, "wb") as fh:
         fh.write(f["data"])
-    out(f"\n[{f.get('sender', '?')} wysłał plik: {dest} ({len(f['data'])} B)]")
+    out(f"\n[{_fmt_ts(f.get('timestamp_ms'))}] {f.get('sender', '?')} "
+        f"wysłał plik: {dest} ({len(f['data'])} B)")
 
 
 def _on_ack(_client, a, out=print) -> None:
