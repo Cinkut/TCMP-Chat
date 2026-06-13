@@ -79,10 +79,11 @@ class TestEndToEnd(unittest.TestCase):
         except OSError:
             pass
 
-    def _connect(self) -> TCMPClient:
+    def _connect(self, **client_kwargs) -> TCMPClient:
+        client_kwargs.setdefault("ping_interval", 0)
         last = None
         for _ in range(100):
-            cli = TCMPClient("localhost", self.port, ping_interval=0)
+            cli = TCMPClient("localhost", self.port, **client_kwargs)
             try:
                 cli.connect(use_tls=True, cafile=_CA)
                 return cli
@@ -136,6 +137,64 @@ class TestEndToEnd(unittest.TestCase):
 
         alice.close()
         bob.close()
+
+    def test_resume_after_abrupt_drop(self):
+        cli = self._connect()
+        cli.hello("E2E/resume")
+        cli.login("alice", "alice123")
+        token1 = cli.session_token
+        cli.start()
+
+        # Nagłe zerwanie bez BYE -> serwer zachowuje sesję przez okno resume (5 min).
+        cli.close(send_bye=False)
+        time.sleep(0.5)                      # serwer przetwarza zerwanie
+
+        # Wznowienie: nowe połączenie + AUTH z resume_token (bez hasła).
+        ok2 = cli.reconnect()
+        token2 = cli.session_token
+        self.assertNotEqual(token1, token2)  # serwer rotuje token
+        self.assertIsNotNone(ok2["session_key"])
+        cli.start()
+
+        # Po wznowieniu sesja działa: wyślij do siebie (online) -> DELIVERED + odbiór.
+        acks, msgs = [], []
+        cli.on_ack = lambda _c, a: acks.append(a)
+        cli.on_message = lambda _c, m: msgs.append(m)
+        cli.send_message("alice", "po wznowieniu")
+        self.assertTrue(_wait_until(lambda: acks), "brak ACK po wznowieniu")
+        self.assertEqual(acks[0]["status"], 0x00)             # DELIVERED
+        self.assertTrue(_wait_until(lambda: msgs), "brak odbioru po wznowieniu")
+        self.assertEqual(msgs[0]["text"], "po wznowieniu")
+
+        cli.close()
+
+    def test_auto_reconnect_after_drop(self):
+        cli = self._connect(auto_reconnect=True, reconnect_backoff=0.3,
+                            reconnect_max_attempts=12)
+        cli.hello("E2E/autoreconnect")
+        cli.login("alice", "alice123")
+        token1 = cli.session_token
+
+        disc, recon = [], []
+        cli.on_disconnect = lambda _c, r: disc.append(r)
+        cli.on_reconnect = lambda _c, n: recon.append(n)
+        cli.start()
+
+        # Wymuszone zerwanie połączenia (symulacja awarii sieci).
+        cli._sock.close()
+
+        self.assertTrue(_wait_until(lambda: recon, timeout=8.0),
+                        "klient nie wznowił sesji automatycznie")
+        self.assertTrue(disc, "on_disconnect nie wywołane")
+        self.assertNotEqual(cli.session_token, token1)   # token zrotowany
+
+        # Po automatycznym wznowieniu sesja działa.
+        acks = []
+        cli.on_ack = lambda _c, a: acks.append(a)
+        cli.send_message("alice", "po auto-reconnekcie")
+        self.assertTrue(_wait_until(lambda: acks), "brak ACK po auto-reconnekcie")
+
+        cli.close()
 
     def test_wrong_password_rejected(self):
         from tcmp.errors import TCMPError

@@ -54,7 +54,10 @@ def _mimetype_for(filename: str) -> int:
 class TCMPClient:
     def __init__(self, host: str, port: int = c.DEFAULT_PORT, *,
                  ping_interval: float = c.PING_INTERVAL,
-                 pong_timeout: float = c.PONG_TIMEOUT):
+                 pong_timeout: float = c.PONG_TIMEOUT,
+                 auto_reconnect: bool = False,
+                 reconnect_backoff: float = 1.0,
+                 reconnect_max_attempts: int = 5):
         self.host = host
         self.port = port
         self._sock: socket.socket | None = None
@@ -84,6 +87,16 @@ class TCMPClient:
         self._ping_sent_at = 0.0
         self._keepalive: threading.Thread | None = None
 
+        # Auto-reconnect (spec §4.5: po utracie połączenia klient może podjąć
+        # session resume). Gdy włączone, utrata połączenia uruchamia wznawianie
+        # sesji przez resume() z backoffem.
+        self.auto_reconnect = auto_reconnect
+        self._reconnect_backoff = reconnect_backoff
+        self._reconnect_max_attempts = reconnect_max_attempts
+        self._loss_lock = threading.Lock()
+        self._handling_loss = False
+        self._closing = False
+
         self._reassembly = ReassemblyBuffer()
         self._reader: threading.Thread | None = None
         self._running = False
@@ -94,11 +107,14 @@ class TCMPClient:
         self.on_error = None       # (client, dict) -> None
         self.on_ack = None         # (client, dict) -> None
         self.on_disconnect = None  # (client, str) -> None  (utrata połączenia)
+        self.on_reconnect = None   # (client, int) -> None  (udane wznowienie, nr próby)
 
     # ------------------------------------------------------------------ #
     # Połączenie
     # ------------------------------------------------------------------ #
     def connect(self, *, use_tls: bool = False, cafile: str | None = None) -> None:
+        # Zapamiętujemy opcje, by reconnect() (po zerwaniu) mógł je powtórzyć.
+        self._tls_opts = {"use_tls": use_tls, "cafile": cafile}
         raw = socket.create_connection((self.host, self.port))
         if use_tls:
             # Spec wymaga TLS 1.3 i weryfikacji łańcucha certyfikatów.
@@ -139,15 +155,41 @@ class TCMPClient:
     def login(self, username: str, password: str) -> dict:
         """Uwierzytelnia hasłem i zapisuje token + klucz sesyjny z AUTH_OK."""
         self._send(c.TYPE_AUTH, pm.encode_auth(username, password))
-        reply = fr.parse_frame(fr.recv_frame(self._sock))
+        return self._read_auth_reply(username)
 
+    def resume(self) -> dict:
+        """Wznawia sesję po zerwaniu, wysyłając AUTH z resume_token (bez hasła).
+
+        Wymaga wcześniejszego udanego login() (mamy username + session_token).
+        Serwer rotuje token i klucz - nowy AUTH_OK nadpisuje stan sesji.
+        """
+        if self.username is None or self.session_token is None:
+            raise RuntimeError("resume wymaga wcześniejszego login()")
+        # Nowa sesja: MSG_ID znów od 1, świeży bufor składania fragmentów.
+        with self._id_lock:
+            self._next_id = 1
+        self._reassembly = ReassemblyBuffer()
+        # Klucz starej sesji nie obowiązuje dla nowej ramki AUTH (pre-auth, ZERO_HMAC).
+        self._session_key = None
+        token_bytes = self.session_token.encode("utf-8")
+        self._send(c.TYPE_AUTH, pm.encode_auth(self.username, "", resume_token=token_bytes))
+        return self._read_auth_reply(self.username)
+
+    def reconnect(self) -> dict:
+        """Ponownie nawiązuje połączenie (TCP+TLS) i wznawia sesję przez resume()."""
+        opts = getattr(self, "_tls_opts", {"use_tls": False, "cafile": None})
+        self.connect(**opts)
+        self.hello()
+        return self.resume()
+
+    def _read_auth_reply(self, username: str) -> dict:
+        reply = fr.parse_frame(fr.recv_frame(self._sock))
         if reply["type"] == c.TYPE_ERR:
             info = pm.decode_err(reply["payload"])
             raise TCMPError(info["error_code"], info["message"])
         if reply["type"] != c.TYPE_AUTH_OK:
             raise TCMPError(c.ERR_MALFORMED_PAYLOAD,
                             f"oczekiwano AUTH_OK, otrzymano 0x{reply['type']:02X}")
-
         ok = pm.decode_auth_ok(reply["payload"])
         self.username = username
         self.session_token = ok["session_token"]
@@ -258,7 +300,7 @@ class TCMPClient:
                     continue           # niefatalny -> pomiń ramkę, czytaj dalej
                 self._dispatch(parsed)
         except (ConnectionError, OSError):
-            pass  # połączenie zamknięte - kończymy wątek
+            self._trigger_loss("zerwane połączenie (odczyt)")
         finally:
             self._running = False
 
@@ -323,7 +365,7 @@ class TCMPClient:
             if awaiting:
                 if since_ping >= self._pong_timeout:
                     # Brak PONG w oknie -> utrata połączenia (spec §4.5).
-                    self._on_connection_lost("brak PONG w oknie keep-alive")
+                    self._trigger_loss("brak PONG w oknie keep-alive")
                     break
             elif idle >= self._ping_interval:
                 with self._ka_lock:
@@ -332,18 +374,52 @@ class TCMPClient:
                 try:
                     self._send(c.TYPE_PING, b"")
                 except OSError:
-                    self._on_connection_lost("błąd wysyłania PING")
+                    self._trigger_loss("błąd wysyłania PING")
                     break
 
-    def _on_connection_lost(self, reason: str) -> None:
+    # ------------------------------------------------------------------ #
+    # Obsługa utraty połączenia i auto-reconnect
+    # ------------------------------------------------------------------ #
+    def _trigger_loss(self, reason: str) -> None:
+        # Pojedyncza ścieżka utraty połączenia: wołana przez reader i keep-alive.
+        if self._closing:
+            return                          # rozłączenie zamierzone (close())
+        with self._loss_lock:
+            if self._handling_loss:
+                return                      # już obsługujemy tę utratę
+            self._handling_loss = True
         self._running = False
+        try:
+            if self._sock is not None:
+                self._sock.close()          # odblokuj wątek odczytu na starym gnieździe
+        except OSError:
+            pass
         if self.on_disconnect:
             self.on_disconnect(self, reason)
+        if self.auto_reconnect and self.username and self.session_token:
+            threading.Thread(target=self._reconnect_worker, daemon=True).start()
+        else:
+            self._handling_loss = False
+
+    def _reconnect_worker(self) -> None:
+        for attempt in range(1, self._reconnect_max_attempts + 1):
+            time.sleep(self._reconnect_backoff)
+            try:
+                self.reconnect()            # connect + hello + resume
+                self.start()
+                self._handling_loss = False
+                if self.on_reconnect:
+                    self.on_reconnect(self, attempt)
+                return
+            except (OSError, TCMPError):
+                continue                    # token mógł nie być jeszcze wznawialny
+        self._handling_loss = False         # wyczerpano próby - pozostajemy offline
 
     # ------------------------------------------------------------------ #
     # Zamknięcie
     # ------------------------------------------------------------------ #
     def close(self, *, send_bye: bool = True) -> None:
+        self._closing = True   # zamierzone -> _trigger_loss nie wznawia sesji
         if send_bye and self._sock is not None and self._session_key is not None:
             try:
                 self.bye(c.BYE_REASON_CLEAN)
