@@ -1,0 +1,1 @@
+"""Klient TCMP (Osoba B)."""
