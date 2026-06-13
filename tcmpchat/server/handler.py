@@ -241,9 +241,12 @@ class ClientHandler:
             self.send_ack(parsed["msg_id"], tcmp.ACK_STATUS_DELIVERED)
             return
 
-        recipient, timestamp = self._parse_envelope(assembled)
+        # Nadpisz `sender` uwierzytelnioną nazwą - nie ufamy wartości od klienta
+        # (anti-spoofing). Zapisana i przekazana ramka niesie autorytatywnego nadawcę.
+        assembled = self._restamp_sender(assembled, self.username)
+        _, recipient, timestamp = self._parse_envelope(assembled)
         if type_ == tcmp.TYPE_FILE:
-            self._validate_file(assembled, recipient)
+            self._validate_file(assembled)
 
         if not self.db.get_user(recipient):
             raise tcmp.TCMPError(tcmp.ERR_UNKNOWN_RECIPIENT, f"User {recipient} not found")
@@ -280,24 +283,42 @@ class ClientHandler:
 
     # ============================================================== payloady
     @staticmethod
-    def _parse_envelope(payload: bytes) -> tuple[str, int]:
-        """Wspólny początek payloadu MSG/FILE: recipient (string) + timestamp (8B)."""
+    def _restamp_sender(payload: bytes, sender: str) -> bytes:
+        """Nadpisuje pole `sender` (pierwsze pole MSG/FILE) uwierzytelnioną nazwą.
+
+        Klient mógł wstawić dowolną wartość - serwer ustawia ją autorytatywnie,
+        aby uniemożliwić podszywanie się pod innego nadawcę.
+        """
         try:
-            recipient, off = tcmp.unpack_string(payload, 0)
+            _, off = tcmp.unpack_string(payload, 0)
+        except (IndexError, struct.error):
+            raise tcmp.TCMPError(tcmp.ERR_MALFORMED_PAYLOAD, "brak pola sender")
+        except UnicodeDecodeError:
+            raise tcmp.TCMPError(tcmp.ERR_INVALID_ENCODING, "sender")
+        return tcmp.pack_string(sender) + payload[off:]
+
+    @staticmethod
+    def _parse_envelope(payload: bytes) -> tuple[str, str, int]:
+        """Wspólny początek payloadu MSG/FILE: sender + recipient + timestamp (8B)."""
+        try:
+            sender, off = tcmp.unpack_string(payload, 0)
+            recipient, off = tcmp.unpack_string(payload, off)
             (timestamp,) = struct.unpack_from("!Q", payload, off)
         except (IndexError, struct.error):
             raise tcmp.TCMPError(tcmp.ERR_MALFORMED_PAYLOAD, "envelope")
         except UnicodeDecodeError:
-            raise tcmp.TCMPError(tcmp.ERR_INVALID_ENCODING, "recipient")
-        return recipient, timestamp
+            raise tcmp.TCMPError(tcmp.ERR_INVALID_ENCODING, "sender/recipient")
+        return sender, recipient, timestamp
 
     @staticmethod
-    def _validate_file(payload: bytes, recipient: str) -> None:
-        # recipient(str) + timestamp(8) + filename(str) + mimetype_id(1) + total_filesize(4) + ...
+    def _validate_file(payload: bytes) -> None:
+        # sender(str) + recipient(str) + timestamp(8) + filename(str)
+        # + mimetype_id(1) + total_filesize(4) + ...
         try:
-            _, off = tcmp.unpack_string(payload, 0)
-            off += 8
-            _, off = tcmp.unpack_string(payload, off)
+            _, off = tcmp.unpack_string(payload, 0)     # sender
+            _, off = tcmp.unpack_string(payload, off)   # recipient
+            off += 8                                     # timestamp
+            _, off = tcmp.unpack_string(payload, off)   # filename
             mimetype_id = payload[off]
             off += 1
             (total_filesize,) = struct.unpack_from("!I", payload, off)

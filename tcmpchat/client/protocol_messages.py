@@ -55,32 +55,43 @@ def decode_auth_ok(payload: bytes) -> dict:
 # --------------------------------------------------------------------------- #
 # MSG (0x04)  C <-> S
 # --------------------------------------------------------------------------- #
-def encode_msg(recipient: str, text: str, timestamp_ms: int) -> bytes:
+# Payload: sender | recipient | timestamp | text. Pole `sender` pozwala
+# odbiorcy poznać nadawcę (UC3 krok 11). Klient nadawcy wstawia tu własny
+# login; serwer i tak nadpisuje je uwierzytelnioną nazwą przed routingiem,
+# więc wartość od klienta nie jest zaufana (anti-spoofing).
+def encode_msg(sender: str, recipient: str, text: str, timestamp_ms: int) -> bytes:
+    if len(sender.encode("utf-8")) > c.MAX_SENDER:
+        raise ValueError(f"sender > {c.MAX_SENDER}B")
     if len(recipient.encode("utf-8")) > c.MAX_RECIPIENT:
         raise ValueError(f"recipient > {c.MAX_RECIPIENT}B")
-    out = pack_string(recipient)
+    out = pack_string(sender)
+    out += pack_string(recipient)
     out += struct.pack("!Q", timestamp_ms)
     out += pack_string(text)
     return out
 
 
 def decode_msg(payload: bytes) -> dict:
-    recipient, off = unpack_string(payload, 0)
+    sender, off = unpack_string(payload, 0)
+    recipient, off = unpack_string(payload, off)
     (timestamp_ms,) = struct.unpack_from("!Q", payload, off)
     off += 8
     text, off = unpack_string(payload, off)
-    return {"recipient": recipient, "timestamp_ms": timestamp_ms, "text": text}
+    return {"sender": sender, "recipient": recipient,
+            "timestamp_ms": timestamp_ms, "text": text}
 
 
 # --------------------------------------------------------------------------- #
 # FILE (0x05)  C <-> S
 # --------------------------------------------------------------------------- #
-# Payload (przed fragmentacją): recipient | timestamp | filename | mimetype_id |
-# total_filesize | chunk_data. Cały payload jest następnie cięty na fragmenty
-# przez warstwę fragmentacji (jak MSG) - metadane są w bajtach fragmentu 0,
-# a reassembly skleja strumień z powrotem przed decode_file.
-def encode_file(recipient: str, filename: str, mimetype_id: int,
+# Payload (przed fragmentacją): sender | recipient | timestamp | filename |
+# mimetype_id | total_filesize | chunk_data. Cały payload jest następnie cięty
+# na fragmenty przez warstwę fragmentacji (jak MSG) - metadane są w bajtach
+# fragmentu 0, a reassembly skleja strumień z powrotem przed decode_file.
+def encode_file(sender: str, recipient: str, filename: str, mimetype_id: int,
                 file_bytes: bytes, timestamp_ms: int) -> bytes:
+    if len(sender.encode("utf-8")) > c.MAX_SENDER:
+        raise ValueError(f"sender > {c.MAX_SENDER}B")
     if len(recipient.encode("utf-8")) > c.MAX_RECIPIENT:
         raise ValueError(f"recipient > {c.MAX_RECIPIENT}B")
     if len(filename.encode("utf-8")) > c.MAX_FILENAME:
@@ -89,7 +100,8 @@ def encode_file(recipient: str, filename: str, mimetype_id: int,
         raise ValueError(f"nieobsługiwany mimetype_id=0x{mimetype_id:02X}")
     if len(file_bytes) > c.MAX_FILE_SIZE:
         raise ValueError(f"plik {len(file_bytes)}B > limit {c.MAX_FILE_SIZE}B")
-    out = pack_string(recipient)
+    out = pack_string(sender)
+    out += pack_string(recipient)
     out += struct.pack("!Q", timestamp_ms)
     out += pack_string(filename)
     out += struct.pack("!B", mimetype_id)
@@ -99,7 +111,8 @@ def encode_file(recipient: str, filename: str, mimetype_id: int,
 
 
 def decode_file(payload: bytes) -> dict:
-    recipient, off = unpack_string(payload, 0)
+    sender, off = unpack_string(payload, 0)
+    recipient, off = unpack_string(payload, off)
     (timestamp_ms,) = struct.unpack_from("!Q", payload, off)
     off += 8
     filename, off = unpack_string(payload, off)
@@ -109,6 +122,7 @@ def decode_file(payload: bytes) -> dict:
     off += 4
     data = payload[off:]
     return {
+        "sender": sender,
         "recipient": recipient,
         "timestamp_ms": timestamp_ms,
         "filename": filename,

@@ -48,27 +48,35 @@ class TestAuthOk(unittest.TestCase):
 
 class TestMsg(unittest.TestCase):
     def test_roundtrip(self):
-        payload = pm.encode_msg("bob", "Hej!", 1_700_000_000_000)
+        payload = pm.encode_msg("alice", "bob", "Hej!", 1_700_000_000_000)
         decoded = pm.decode_msg(payload)
+        self.assertEqual(decoded["sender"], "alice")
         self.assertEqual(decoded["recipient"], "bob")
         self.assertEqual(decoded["text"], "Hej!")
         self.assertEqual(decoded["timestamp_ms"], 1_700_000_000_000)
 
     def test_roundtrip_utf8(self):
-        decoded = pm.decode_msg(pm.encode_msg("łukasz", "zażółć gęślą jaźń", 1))
+        decoded = pm.decode_msg(pm.encode_msg("żółw", "łukasz", "zażółć gęślą jaźń", 1))
+        self.assertEqual(decoded["sender"], "żółw")
         self.assertEqual(decoded["recipient"], "łukasz")
         self.assertEqual(decoded["text"], "zażółć gęślą jaźń")
 
     def test_rejects_too_long_recipient(self):
         with self.assertRaises(ValueError):
-            pm.encode_msg("r" * (c.MAX_RECIPIENT + 1), "hi", 1)
+            pm.encode_msg("alice", "r" * (c.MAX_RECIPIENT + 1), "hi", 1)
+
+    def test_rejects_too_long_sender(self):
+        with self.assertRaises(ValueError):
+            pm.encode_msg("s" * (c.MAX_SENDER + 1), "bob", "hi", 1)
 
 
 class TestFile(unittest.TestCase):
     def test_roundtrip(self):
         data = bytes(range(256)) * 4
-        payload = pm.encode_file("bob", "kot.png", c.MIMETYPE_PNG, data, 1_700_000_000_000)
+        payload = pm.encode_file("alice", "bob", "kot.png", c.MIMETYPE_PNG,
+                                 data, 1_700_000_000_000)
         decoded = pm.decode_file(payload)
+        self.assertEqual(decoded["sender"], "alice")
         self.assertEqual(decoded["recipient"], "bob")
         self.assertEqual(decoded["filename"], "kot.png")
         self.assertEqual(decoded["mimetype_id"], c.MIMETYPE_PNG)
@@ -77,16 +85,16 @@ class TestFile(unittest.TestCase):
 
     def test_rejects_oversize_file(self):
         with self.assertRaises(ValueError):
-            pm.encode_file("bob", "big.jpg", c.MIMETYPE_JPEG,
+            pm.encode_file("alice", "bob", "big.jpg", c.MIMETYPE_JPEG,
                            b"\x00" * (c.MAX_FILE_SIZE + 1), 1)
 
     def test_rejects_bad_mimetype(self):
         with self.assertRaises(ValueError):
-            pm.encode_file("bob", "f.gif", 0x09, b"x", 1)
+            pm.encode_file("alice", "bob", "f.gif", 0x09, b"x", 1)
 
     def test_rejects_too_long_filename(self):
         with self.assertRaises(ValueError):
-            pm.encode_file("bob", "f" * (c.MAX_FILENAME + 1) + ".png",
+            pm.encode_file("alice", "bob", "f" * (c.MAX_FILENAME + 1) + ".png",
                            c.MIMETYPE_PNG, b"x", 1)
 
 

@@ -1,9 +1,8 @@
 """Klient protokołu TCMP.
 
-Zakres MVP: nawiązanie połączenia (TCP, opcjonalnie TLS), HELLO, AUTH
-hasłem, odbiór AUTH_OK, wysyłanie i odbiór MSG z automatycznym ACK oraz
-keep-alive PING/PONG. Transfer plików (FILE) i session resume są poza tym
-etapem.
+Zakres: nawiązanie połączenia (TCP, opcjonalnie TLS), HELLO, AUTH hasłem,
+odbiór AUTH_OK, wysyłanie i odbiór MSG/FILE z automatycznym ACK, fragmentacja,
+keep-alive PING/PONG oraz session resume po zerwaniu połączenia.
 
 Typowe użycie:
 
@@ -204,7 +203,7 @@ class TCMPClient:
         """Wysyła MSG; przy długim tekście dzieli na fragmenty (wspólny MSG_ID)."""
         if self._session_key is None:
             raise RuntimeError("nie zalogowano - brak session_key")
-        payload = pm.encode_msg(recipient, text, _now_ms())
+        payload = pm.encode_msg(self.username, recipient, text, _now_ms())
         msg_id = self._next_msg_id()
 
         fragments = fragment_payload(payload)
@@ -223,7 +222,8 @@ class TCMPClient:
         with open(filepath, "rb") as fh:
             file_bytes = fh.read()
         filename = os.path.basename(filepath)
-        payload = pm.encode_file(recipient, filename, mimetype_id, file_bytes, _now_ms())
+        payload = pm.encode_file(self.username, recipient, filename, mimetype_id,
+                                 file_bytes, _now_ms())
         msg_id = self._next_msg_id()
 
         for frag in fragment_payload(payload):

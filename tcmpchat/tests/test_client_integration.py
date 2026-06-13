@@ -52,10 +52,10 @@ class TestClientFullFlow(unittest.TestCase):
                     c.TYPE_AUTH_OK, 0, 1, 0,
                     _encode_auth_ok("tok-123", KEY, 2), None))
 
-                # serwer wysyła wiadomość od alice do klienta
+                # serwer wysyła wiadomość od bob do klienta (alice)
                 send_frame(s_end, build_frame(
                     c.TYPE_MSG, 0, 100, 0,
-                    pm.encode_msg("alice", "Czesc", 123), KEY))
+                    pm.encode_msg("bob", "alice", "Czesc", 123), KEY))
 
                 ack = parse_frame(recv_frame(s_end))
                 results["ack"] = pm.decode_ack(ack["payload"])
@@ -83,6 +83,7 @@ class TestClientFullFlow(unittest.TestCase):
 
         self.assertTrue(_wait_until(lambda: received), "nie odebrano MSG od serwera")
         self.assertEqual(received[0]["text"], "Czesc")
+        self.assertEqual(received[0]["sender"], "bob")
         self.assertEqual(received[0]["recipient"], "alice")
 
         cli.send_message("bob", "Hej!")
@@ -93,6 +94,7 @@ class TestClientFullFlow(unittest.TestCase):
         self.assertEqual(results["auth_type"], c.TYPE_AUTH)
         self.assertEqual(results["ack"]["ack_msg_id"], 100)
         self.assertEqual(results["ack"]["status"], c.ACK_STATUS_DELIVERED)
+        self.assertEqual(results["client_msg"]["sender"], "alice")
         self.assertEqual(results["client_msg"]["recipient"], "bob")
         self.assertEqual(results["client_msg"]["text"], "Hej!")
 
@@ -140,7 +142,7 @@ class TestClientFullFlow(unittest.TestCase):
             # MSG podpisana NIEWŁAŚCIWYM kluczem - HMAC nie zgodzi się z KEY
             send_frame(s_end, build_frame(
                 c.TYPE_MSG, 0, 50, 0,
-                pm.encode_msg("alice", "spoofed", 1), wrong_key))
+                pm.encode_msg("mallory", "alice", "spoofed", 1), wrong_key))
 
         srv = threading.Thread(target=fake_server)
         srv.start()
@@ -227,7 +229,7 @@ class TestClientFileTransfer(unittest.TestCase):
             parse_frame(recv_frame(s_end))   # AUTH
             send_frame(s_end, build_frame(
                 c.TYPE_AUTH_OK, 0, 1, 0, _encode_auth_ok("tok", KEY, 0), None))
-            payload = pm.encode_file("alice", "foto.jpg", c.MIMETYPE_JPEG, file_data, 1)
+            payload = pm.encode_file("bob", "alice", "foto.jpg", c.MIMETYPE_JPEG, file_data, 1)
             for frag in fragment_payload(payload):
                 flags = c.FLAG_MORE_DATA if frag.more_data else 0
                 send_frame(s_end, build_frame(
