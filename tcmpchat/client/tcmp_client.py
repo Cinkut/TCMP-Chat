@@ -107,6 +107,11 @@ class TCMPClient:
         self.on_ack = None         # (client, dict) -> None
         self.on_disconnect = None  # (client, str) -> None  (utrata połączenia)
         self.on_reconnect = None   # (client, int) -> None  (udane wznowienie, nr próby)
+        self.on_verbose = None     # (client, str) -> None  (diagnostyka --verbose)
+
+    def _v(self, msg: str) -> None:
+        if self.on_verbose:
+            self.on_verbose(self, msg)
 
     # ------------------------------------------------------------------ #
     # Połączenie
@@ -114,14 +119,19 @@ class TCMPClient:
     def connect(self, *, use_tls: bool = False, cafile: str | None = None) -> None:
         # Zapamiętujemy opcje, by reconnect() (po zerwaniu) mógł je powtórzyć.
         self._tls_opts = {"use_tls": use_tls, "cafile": cafile}
+        self._v(f"Łączenie z {self.host}:{self.port}...")
         raw = socket.create_connection((self.host, self.port))
         if use_tls:
             # Spec wymaga TLS 1.3 i weryfikacji łańcucha certyfikatów.
             ctx = ssl.create_default_context(cafile=cafile)
             ctx.minimum_version = ssl.TLSVersion.TLSv1_3
             self._sock = ctx.wrap_socket(raw, server_hostname=self.host)
+            if self.on_verbose:
+                ci = self._sock.cipher()
+                self._v(f"TLS handshake OK ({ci[1]}, {ci[0]})")
         else:
             self._sock = raw
+            self._v("Połączono (bez TLS)")
 
     def _next_msg_id(self) -> int:
         with self._id_lock:
@@ -150,10 +160,12 @@ class TCMPClient:
     # ------------------------------------------------------------------ #
     def hello(self, client_agent: str = "TCMPClient/1.0") -> None:
         self._send(c.TYPE_HELLO, pm.encode_hello(client_agent))
+        self._v("HELLO wysłane")
 
     def login(self, username: str, password: str) -> dict:
         """Uwierzytelnia hasłem i zapisuje token + klucz sesyjny z AUTH_OK."""
         self._send(c.TYPE_AUTH, pm.encode_auth(username, password))
+        self._v("AUTH wysłane")
         return self._read_auth_reply(username)
 
     def resume(self) -> dict:
@@ -172,6 +184,7 @@ class TCMPClient:
         self._session_key = None
         token_bytes = self.session_token.encode("utf-8")
         self._send(c.TYPE_AUTH, pm.encode_auth(self.username, "", resume_token=token_bytes))
+        self._v("AUTH wysłane (resume_token)")
         return self._read_auth_reply(self.username)
 
     def reconnect(self) -> dict:
@@ -194,6 +207,8 @@ class TCMPClient:
         self.session_token = ok["session_token"]
         self._session_key = ok["session_key"]
         self.queued_messages = ok["queued_messages"]
+        self._v(f"AUTH_OK: queued={ok['queued_messages']}, "
+                f"token={ok['session_token'][:4]}...")
         return ok
 
     # ------------------------------------------------------------------ #

@@ -11,11 +11,17 @@ Wymaga: bcrypt  (pip install bcrypt)
 """
 
 import argparse
+import os
 import sqlite3
-import struct
 import sys
 import time
 from pathlib import Path
+
+# Dołóż katalog tcmpchat/ do sys.path, aby `import tcmp` działał niezależnie
+# od katalogu uruchomienia skryptu.
+_TCMPCHAT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _TCMPCHAT_DIR not in sys.path:
+    sys.path.insert(0, _TCMPCHAT_DIR)
 
 try:
     import bcrypt
@@ -23,6 +29,8 @@ except ImportError:
     sys.exit(
         "[ERR] Brak biblioteki bcrypt. Zainstaluj: pip install bcrypt"
     )
+
+from tcmp.payloads import encode_msg   # noqa: E402  (wspólne kodowanie payloadu MSG)
 
 _HERE = Path(__file__).parent
 _SCHEMA = _HERE / "init.sql"
@@ -54,20 +62,6 @@ _MESSAGES: list[tuple[str, str, str]] = [
 
 def _hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-
-
-def _pack_string(s: str) -> bytes:
-    b = s.encode("utf-8")
-    return struct.pack("!H", len(b)) + b
-
-
-def _msg_payload(recipient: str, text: str, ts_ms: int) -> bytes:
-    """Buduje binarny payload ramki MSG zgodny ze specyfikacją TCMP."""
-    return (
-        _pack_string(recipient)
-        + struct.pack("!Q", ts_ms)
-        + _pack_string(text)
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +103,7 @@ def seed_messages(conn: sqlite3.Connection) -> None:
     now_ms = int(time.time() * 1000)
     for i, (sender, recipient, text) in enumerate(_MESSAGES):
         ts_ms = now_ms - (len(_MESSAGES) - i) * 60_000  # każda o minutę wcześniej
-        payload = _msg_payload(recipient, text, ts_ms)
+        payload = encode_msg(sender, recipient, text, ts_ms)
         conn.execute(
             """
             INSERT INTO messages (sender, recipient, type, payload, timestamp, delivered)

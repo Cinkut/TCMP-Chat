@@ -18,3 +18,8 @@ from .frame import (              # noqa: F401
 from .fragment import (           # noqa: F401
     Fragment, MAX_FRAGMENT_PAYLOAD, fragment_payload, ReassemblyBuffer,
 )
+from .payloads import (           # noqa: F401  (kodowanie/dekodowanie payloadów)
+    encode_hello, encode_auth, encode_auth_ok, decode_auth_ok,
+    encode_msg, decode_msg, encode_file, decode_file,
+    encode_ack, decode_ack, decode_err, encode_bye, decode_bye,
+)

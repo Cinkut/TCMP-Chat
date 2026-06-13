@@ -31,16 +31,25 @@ def parse_args(argv=None):
     parser.add_argument(
         "--log-level", default="INFO", choices=["DEBUG", "INFO"], help="poziom logowania"
     )
+    parser.add_argument(
+        "--log-file", default="tcmpchat-server.log",
+        help="plik logów zapisywany równolegle ze stdout (pusty = tylko stdout)",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
-    logging.basicConfig(
-        level=getattr(logging, args.log_level),
-        format="[%(levelname)s] %(asctime)s %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
+    # Logi jednocześnie na stdout i (opcjonalnie) do pliku - spec §5.5.
+    fmt = logging.Formatter(
+        "[%(levelname)s] %(asctime)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
     )
+    handlers = [logging.StreamHandler()]
+    if args.log_file:
+        handlers.append(logging.FileHandler(args.log_file, encoding="utf-8"))
+    for h in handlers:
+        h.setFormatter(fmt)
+    logging.basicConfig(level=getattr(logging, args.log_level), handlers=handlers)
     log = logging.getLogger("tcmp.main")
 
     for path, label in ((args.cert, "certyfikat"), (args.key, "klucz")):

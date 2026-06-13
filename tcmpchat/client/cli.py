@@ -202,6 +202,10 @@ def _on_reconnect(_client, attempt, out=print) -> None:
     out(f"[sesja wznowiona automatycznie (próba {attempt})]")
 
 
+def _on_verbose(_client, msg, out=print) -> None:
+    out(f"[VERBOSE] {msg}")
+
+
 # --------------------------------------------------------------------------- #
 # Punkt wejścia
 # --------------------------------------------------------------------------- #
@@ -216,6 +220,8 @@ def parse_args(argv=None):
     p.add_argument("--agent", default="TCMP-CLI/1.0")
     p.add_argument("--auto-reconnect", action="store_true",
                    help="automatycznie wznawiaj sesję po zerwaniu połączenia")
+    p.add_argument("--verbose", action="store_true",
+                   help="diagnostyka połączenia/TLS/handshake ([VERBOSE])")
     return p.parse_args(argv)
 
 
@@ -230,6 +236,8 @@ def main(argv=None) -> int:
     client.on_error = _on_error
     client.on_disconnect = _on_disconnect
     client.on_reconnect = _on_reconnect
+    if args.verbose:
+        client.on_verbose = _on_verbose
 
     # --user/--password = wygodny skrót auto-logowania; inaczej /login lub /register.
     if args.user and args.password:
