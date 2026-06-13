@@ -8,6 +8,7 @@ from client import cli
 
 class _FakeClient:
     def __init__(self):
+        self.username = "tester"   # prawdziwy klient ma username po login()
         self.sent = []
         self.files = []
 
@@ -47,6 +48,14 @@ class TestHandleCommand(unittest.TestCase):
     def test_msg_sends(self):
         self.assertTrue(self._run("/msg bob Cześć Bob!"))
         self.assertEqual(self.cli.sent, [("bob", "Cześć Bob!")])
+
+    def test_msg_echo_logs_sender_and_text(self):
+        self._run("/msg bob Cześć Bob!")
+        # echo lokalne musi pokazać nadawcę, odbiorcę i treść
+        self.assertTrue(any(
+            "tester" in l and "bob" in l and "Cześć Bob!" in l
+            for l in self.out.lines
+        ))
 
     def test_msg_preserves_spaces_in_text(self):
         self._run("/msg bob to jest dłuższy tekst")

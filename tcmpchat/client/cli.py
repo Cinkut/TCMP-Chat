@@ -60,7 +60,7 @@ def handle_command(client: TCMPClient, line: str, out=print) -> bool:
         recipient, text = parts[1], parts[2]
         try:
             mid = client.send_message(recipient, text)
-            out(f"[wysłano #{mid} -> {recipient}]")
+            out(f"[{client.username} -> {recipient}] {text}  (#{mid})")
         except (OSError, RuntimeError, ValueError) as exc:
             out(f"[błąd wysyłki: {exc}]")
         return True
@@ -71,7 +71,7 @@ def handle_command(client: TCMPClient, line: str, out=print) -> bool:
         recipient, path = parts[1], parts[2]
         try:
             mid = client.send_file(recipient, path)
-            out(f"[wysłano plik #{mid} -> {recipient}]")
+            out(f"[{client.username} -> {recipient}] wysłano plik: {path}  (#{mid})")
         except (OSError, RuntimeError, ValueError) as exc:
             out(f"[błąd wysyłki pliku: {exc}]")
         return True
