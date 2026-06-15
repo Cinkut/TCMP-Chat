@@ -361,7 +361,6 @@ python -m unittest tests.test_cli -v
 Ran 173 tests in 26.232s
 
 OK
-```
 
 ### Co sprawdzają poszczególne moduły
 
